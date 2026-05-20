@@ -1,0 +1,22 @@
+*, *::before, *::after { box-sizing: border-box; }
+
+html, body {
+  margin: 0;
+  padding: 0;
+  width: 100%;
+  height: 100%;
+  background: #0A0A0B;
+  font-family: 'Geist', system-ui, sans-serif;
+  -webkit-text-size-adjust: 100%;
+  overscroll-behavior: none;
+}
+
+#root {
+  width: 100%;
+  height: 100%;
+  /* Use dvh so the app fills the screen below the browser bar on mobile */
+  height: 100dvh;
+}
+
+/* Prevent rubber-band scroll on iOS at the document level */
+body { overflow: hidden; position: fixed; width: 100%; }
