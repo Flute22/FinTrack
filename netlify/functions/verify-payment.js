@@ -38,6 +38,8 @@ async function supabaseQuery(path, method, body) {
 export async function handler(event) {
   if (event.httpMethod === 'OPTIONS') return { statusCode: 204, headers: cors };
   if (event.httpMethod !== 'POST') return { statusCode: 405, headers: cors, body: 'Method not allowed' };
+  if (!RAZORPAY_KEY_SECRET)
+    return { statusCode: 503, headers: cors, body: JSON.stringify({ error: 'Payment gateway not configured.' }) };
 
   try {
     const userId = await verifySupabaseUser(event.headers.authorization);
@@ -54,7 +56,11 @@ export async function handler(event) {
       .update(`${razorpay_order_id}|${razorpay_payment_id}`)
       .digest('hex');
 
-    if (expectedSig !== razorpay_signature) {
+    // Timing-safe comparison prevents timing-based signature oracle attacks
+    const sigBuffer  = Buffer.from(razorpay_signature, 'hex');
+    const expBuffer  = Buffer.from(expectedSig, 'hex');
+    const sigValid   = sigBuffer.length === expBuffer.length && crypto.timingSafeEqual(sigBuffer, expBuffer);
+    if (!sigValid) {
       await supabaseQuery(
         `wallet_transactions?razorpay_order_id=eq.${razorpay_order_id}&user_id=eq.${userId}`,
         'PATCH',

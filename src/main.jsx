@@ -2736,7 +2736,7 @@ function useStore(userId) {
     if (!userId) { setWalletLoading(false); return; }
     const [balRes, txRes] = await Promise.all([
       db.from('wallet').select('balance').eq('user_id', userId).maybeSingle(),
-      db.from('wallet_transactions').select('*').eq('user_id', userId).eq('status', 'completed').order('created_at', { ascending: false }).limit(50),
+      db.from('wallet_transactions').select('*').eq('user_id', userId).order('created_at', { ascending: false }).limit(50),
     ]);
     // existing users won't have a wallet row yet — default to 0
     setWalletBalance(balRes.data ? Number(balRes.data.balance) : 0);
@@ -2855,6 +2855,8 @@ const Icon = ({ name, size = 22, color = 'currentColor', strokeWidth = 1.75, fil
     case 'camera':     return <svg {...props}><path d="M3 8a2 2 0 0 1 2-2h2l2-2h6l2 2h2a2 2 0 0 1 2 2v10a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/><circle cx="12" cy="13" r="4"/></svg>;
     case 'list':       return <svg {...props}><path d="M8 6h13M8 12h13M8 18h13M3 6h.01M3 12h.01M3 18h.01"/></svg>;
     case 'filter':     return <svg {...props}><path d="M4 6h16M7 12h10M10 18h4"/></svg>;
+    case 'sync':       return <svg {...props}><path d="M23 4v6h-6"/><path d="M1 20v-6h6"/><path d="M3.5 9A9 9 0 0 1 18.5 5.5L23 10M1 14l4.5 4.5A9 9 0 0 0 20.5 15"/></svg>;
+    case 'send':       return <svg {...props}><line x1="22" y1="2" x2="11" y2="13"/><polygon points="22 2 15 22 11 13 2 9 22 2"/></svg>;
     case 'wallet-fill':return <svg {...props} fill={color} stroke="none"><rect x="3" y="6" width="18" height="13" rx="3"/><rect x="15" y="11" width="4" height="4" rx="1" fill={fill === color ? props.stroke : (props.fill === 'none' ? '#fff' : props.fill)} opacity="0.4"/></svg>;
     case 'rupee':      return <svg {...props}><path d="M7 4h10M7 8h10M7 4c0 4 3 8 10 12M12 20L7 12"/></svg>;
     case 'upi':        return <svg width={size} height={size} viewBox="0 0 24 24"><path d="M7 4l3 16 4-10 3 10 3-16" stroke={color} strokeWidth="2" fill="none" strokeLinecap="round" strokeLinejoin="round"/></svg>;
@@ -3290,11 +3292,12 @@ function HomeScreen({ store, nav, onAddTap, user }) {
 
       {/* Wallet quick access */}
       <div style={{ padding: '0 16px 10px' }}>
-        <Card pad={14} radius={20} onClick={() => nav.push('wallet')} style={{ cursor: 'pointer' }}>
+        {/* item 31: matched pad/radius to the stats cards below for visual consistency */}
+        <Card pad={16} radius={22} onClick={() => nav.push('wallet')} style={{ cursor: 'pointer' }}>
           <Row justify="space-between" align="center">
             <Row gap={12} align="center">
               <div style={{
-                width: 40, height: 40, borderRadius: 12,
+                width: 42, height: 42, borderRadius: 13,
                 background: `${t.accent}22`, border: `1px solid ${t.accent}44`,
                 display: 'flex', alignItems: 'center', justifyContent: 'center',
               }}>
@@ -3302,7 +3305,7 @@ function HomeScreen({ store, nav, onAddTap, user }) {
               </div>
               <div>
                 <div style={{ color: t.text3, fontSize: 10, fontWeight: 600, letterSpacing: 0.6, textTransform: 'uppercase' }}>Wallet balance</div>
-                <div className="ft-num" style={{ color: t.text, fontSize: 20, fontWeight: 600, letterSpacing: -0.6, marginTop: 1 }}>
+                <div className="ft-num" style={{ color: t.text, fontSize: 21, fontWeight: 600, letterSpacing: -0.6, marginTop: 2 }}>
                   {store.walletLoading
                     ? <span className="ft-pulse" style={{ display: 'inline-block', width: 72, height: 20, borderRadius: 8, background: t.panel3, verticalAlign: 'middle' }}/>
                     : fmtMoney(store.walletBalance)}
@@ -5496,23 +5499,100 @@ function Onboarding({ onDone }) {
 // ════════════════════════════════════════════════════════════
 const RAZORPAY_KEY_ID = import.meta.env.VITE_RAZORPAY_KEY_ID || '';
 
-function WalletScreen({ store, nav, user, onAddMoney }) {
+// Wallet date formatter — shared
+const fmtWalletDate = (iso) => {
+  const d = new Date(iso);
+  const now = new Date();
+  const diff = now - d;
+  if (diff < 60000) return 'Just now';
+  if (diff < 3600000) return `${Math.floor(diff / 60000)}m ago`;
+  if (diff < 86400000) return `${Math.floor(diff / 3600000)}h ago`;
+  // item 30: use user's active currency locale instead of hardcoded en-IN
+  const locale = ACTIVE_CURRENCY?.locale || 'en-IN';
+  return d.toLocaleDateString(locale, { day: 'numeric', month: 'short', year: d.getFullYear() !== now.getFullYear() ? 'numeric' : undefined });
+};
+
+// Wallet TX Detail Sheet — item 17
+function WalletTxDetailSheet({ wtx, onClose }) {
+  const t = useTheme();
+  const isCredit = wtx.type === 'credit';
+  const isPending = wtx.status === 'pending';
+  const isFailed = wtx.status === 'failed';
+  const statusColor = isPending ? t.amber : isFailed ? t.rose : t.accent;
+  const statusLabel = isPending ? 'Pending' : isFailed ? 'Failed' : 'Completed';
+  return (
+    <div onClick={onClose} style={{ position: 'fixed', inset: 0, background: t.scrim, zIndex: 200, display: 'flex', alignItems: 'flex-end' }}>
+      <div onClick={e => e.stopPropagation()} className="ft-sheet" style={{
+        width: '100%', background: t.bg, borderTopLeftRadius: 28, borderTopRightRadius: 28,
+        padding: 20, paddingBottom: 'max(28px, calc(env(safe-area-inset-bottom) + 16px))',
+      }}>
+        <div style={{ width: 40, height: 4, borderRadius: 99, background: t.text4, margin: '0 auto 20px' }}/>
+
+        {/* Amount hero */}
+        <div style={{ textAlign: 'center', marginBottom: 24 }}>
+          <div style={{
+            width: 64, height: 64, borderRadius: 20, margin: '0 auto 12px',
+            background: isCredit ? `${t.accent}22` : `${t.rose}22`,
+            border: `1px solid ${isCredit ? t.accent : t.rose}44`,
+            display: 'flex', alignItems: 'center', justifyContent: 'center',
+          }}>
+            <Icon name={isCredit ? 'arrow-dn' : 'send'} size={28} color={isCredit ? t.accent : t.rose}/>
+          </div>
+          <div className="ft-num" style={{ color: t.text, fontSize: 36, fontWeight: 700, letterSpacing: -1.5 }}>
+            {isCredit ? '+' : '−'}₹{wtx.amount.toLocaleString('en-IN')}
+          </div>
+          <div style={{
+            display: 'inline-flex', alignItems: 'center', gap: 5, marginTop: 8,
+            padding: '4px 12px', borderRadius: 99, background: `${statusColor}22`,
+          }}>
+            <div style={{ width: 6, height: 6, borderRadius: 99, background: statusColor }}/>
+            <span style={{ color: statusColor, fontSize: 12, fontWeight: 600 }}>{statusLabel}</span>
+          </div>
+        </div>
+
+        {/* Details */}
+        <Card pad={4} radius={18}>
+          {[
+            { label: 'Type', value: isCredit ? 'Money added to wallet' : (wtx.description || 'Payment sent') },
+            { label: 'Date', value: new Date(wtx.created_at).toLocaleString('en-IN', { day: 'numeric', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit' }) },
+            wtx.razorpay_payment_id && { label: 'Reference', value: wtx.razorpay_payment_id },
+            wtx.description && wtx.type === 'debit' && { label: 'Paid to', value: wtx.description },
+          ].filter(Boolean).map((row, i, arr) => (
+            <div key={row.label} style={{
+              display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start',
+              padding: '12px 14px', borderBottom: i < arr.length - 1 ? `1px solid ${t.hairline}` : 'none', gap: 12,
+            }}>
+              <span style={{ color: t.text3, fontSize: 13 }}>{row.label}</span>
+              <span style={{ color: t.text, fontSize: 13, fontWeight: 500, textAlign: 'right', maxWidth: '65%', wordBreak: 'break-all' }}>{row.value}</span>
+            </div>
+          ))}
+        </Card>
+
+        <Btn full style={{ marginTop: 16 }} onClick={onClose}>Close</Btn>
+      </div>
+    </div>
+  );
+}
+
+function WalletScreen({ store, nav, user, onAddMoney, onPay }) {
   const t = useTheme();
   const { walletBalance, walletTx, walletLoading, refreshWallet } = store;
+  const [selectedTx, setSelectedTx] = React.useState(null); // item 17
+  const [isRefreshing, setIsRefreshing] = React.useState(false);
 
-  const fmtWalletDate = (iso) => {
-    const d = new Date(iso);
-    const now = new Date();
-    const diff = now - d;
-    if (diff < 60000) return 'Just now';
-    if (diff < 3600000) return `${Math.floor(diff / 60000)}m ago`;
-    if (diff < 86400000) return `${Math.floor(diff / 3600000)}h ago`;
-    return d.toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: d.getFullYear() !== now.getFullYear() ? 'numeric' : undefined });
+  const handleRefresh = async () => {
+    setIsRefreshing(true);
+    await refreshWallet();
+    setIsRefreshing(false);
   };
+
+  // Status helpers for item 18
+  const statusColor = (s) => ({ completed: t.accent, pending: t.amber, failed: t.rose }[s] || t.text3);
+  const statusLabel = (s) => ({ completed: '', pending: 'Pending', failed: 'Failed' }[s] || s);
 
   return (
     <div style={{ background: t.bg, minHeight: '100%', paddingBottom: 'max(88px, calc(env(safe-area-inset-bottom) + 72px))' }}>
-      {/* Header */}
+      {/* Header — item 23: sync icon for refresh */}
       <div style={{ padding: '8px 16px 4px' }}>
         <Row justify="space-between" align="center">
           <button className="ft-tap" onClick={() => nav.pop()} style={{
@@ -5522,40 +5602,31 @@ function WalletScreen({ store, nav, user, onAddMoney }) {
             <Icon name="back" size={18} color={t.text}/>
           </button>
           <div style={{ color: t.text, fontSize: 17, fontWeight: 600 }}>Wallet</div>
-          <button className="ft-tap" onClick={refreshWallet} style={{
+          <button className="ft-tap" onClick={handleRefresh} style={{
             width: 36, height: 36, borderRadius: 99, background: t.panel2,
             border: `1px solid ${t.hairline}`, display: 'flex', alignItems: 'center', justifyContent: 'center', cursor: 'pointer',
+            animation: isRefreshing ? 'ftPulse 1s infinite' : 'none',
           }}>
-            <Icon name="sparkles" size={17} color={t.text2}/>
+            <Icon name="sync" size={16} color={isRefreshing ? t.accent : t.text2}/>
           </button>
         </Row>
       </div>
 
-      {/* Balance card */}
+      {/* Balance card — item 15: Pay button added */}
       <div style={{ padding: '16px 16px 8px' }}>
         <Card pad={0} radius={24} style={{ overflow: 'hidden', position: 'relative' }}>
-          <div style={{
-            position: 'absolute', right: -40, top: -40, width: 160, height: 160, borderRadius: 999,
-            background: `radial-gradient(circle, ${t.accent}20, transparent 70%)`,
-          }}/>
-          <div style={{
-            position: 'absolute', left: -30, bottom: -30, width: 120, height: 120, borderRadius: 999,
-            background: `radial-gradient(circle, ${t.accent}10, transparent 70%)`,
-          }}/>
+          <div style={{ position: 'absolute', right: -40, top: -40, width: 160, height: 160, borderRadius: 999, background: `radial-gradient(circle, ${t.accent}20, transparent 70%)` }}/>
+          <div style={{ position: 'absolute', left: -30, bottom: -30, width: 120, height: 120, borderRadius: 999, background: `radial-gradient(circle, ${t.accent}10, transparent 70%)` }}/>
+
           <div style={{ padding: '24px 20px 12px', position: 'relative' }}>
             <Row gap={8} align="center">
-              <div style={{
-                width: 40, height: 40, borderRadius: 12, background: `${t.accent}22`,
-                border: `1px solid ${t.accent}44`,
-                display: 'flex', alignItems: 'center', justifyContent: 'center',
-              }}>
+              <div style={{ width: 40, height: 40, borderRadius: 12, background: `${t.accent}22`, border: `1px solid ${t.accent}44`, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
                 <Icon name="wallet" size={20} color={t.accent}/>
               </div>
               <div>
-                <div style={{ color: t.text3, fontSize: 10, fontWeight: 600, letterSpacing: 0.7, textTransform: 'uppercase' }}>
-                  Available balance
-                </div>
-                <div className="ft-num" style={{ color: t.text, fontSize: 34, fontWeight: 600, letterSpacing: -1.5, lineHeight: 1, marginTop: 4 }}>
+                <div style={{ color: t.text3, fontSize: 10, fontWeight: 600, letterSpacing: 0.7, textTransform: 'uppercase' }}>Available balance</div>
+                {/* item 16: key=walletBalance triggers re-animation when balance changes */}
+                <div key={walletBalance} className="ft-num ft-fade-in" style={{ color: t.text, fontSize: 34, fontWeight: 600, letterSpacing: -1.5, lineHeight: 1, marginTop: 4 }}>
                   {walletLoading
                     ? <span className="ft-pulse" style={{ display: 'inline-block', width: 120, height: 32, borderRadius: 10, background: t.panel3, verticalAlign: 'middle' }}/>
                     : fmtMoney(walletBalance)}
@@ -5566,84 +5637,101 @@ function WalletScreen({ store, nav, user, onAddMoney }) {
 
           <div style={{ padding: '8px 20px 20px', position: 'relative' }}>
             <Row gap={10}>
-              <Btn full size="lg" onClick={onAddMoney} style={{ flex: 2, height: 52 }}>
+              <Btn size="lg" onClick={onAddMoney} style={{ flex: 1, height: 52 }}>
                 <Icon name="plus" size={18} color={t.accentInk}/>
-                Add Money
+                Add
+              </Btn>
+              <Btn size="lg" variant="ghost" onClick={onPay} disabled={!walletBalance || walletLoading} style={{ flex: 1, height: 52, borderColor: t.accent, color: t.accent }}>
+                <Icon name="send" size={16} color={walletBalance ? t.accent : t.text3}/>
+                Pay
               </Btn>
             </Row>
           </div>
         </Card>
       </div>
 
-      {/* Payment methods info */}
+      {/* Security badge */}
       <div style={{ padding: '4px 16px 8px' }}>
-        <Card pad={14} radius={18}>
+        <Card pad={12} radius={18}>
           <Row gap={10} align="center">
-            <Icon name="shield" size={18} color={t.accent}/>
+            <Icon name="shield" size={16} color={t.accent}/>
             <div style={{ flex: 1 }}>
-              <div style={{ color: t.text, fontSize: 13, fontWeight: 600 }}>Secured by Razorpay</div>
-              <div style={{ color: t.text3, fontSize: 11, marginTop: 1 }}>Google Pay, UPI, Cards & Net Banking</div>
+              <div style={{ color: t.text, fontSize: 12, fontWeight: 600 }}>Secured by Razorpay</div>
+              <div style={{ color: t.text3, fontSize: 11, marginTop: 1 }}>Google Pay · UPI · Cards · Net Banking</div>
             </div>
-            <Icon name="upi" size={22} color={t.text3}/>
+            <Icon name="upi" size={20} color={t.text3}/>
           </Row>
         </Card>
       </div>
 
-      {/* Transaction history */}
+      {/* Transaction history — items 17, 18 */}
       <SectionHeader title="Payment history"/>
       <div style={{ padding: '0 16px' }}>
         {walletLoading ? (
-          <div style={{ textAlign: 'center', padding: 24, color: t.text3, fontSize: 13 }}>Loading...</div>
+          <Stack gap={8}>
+            {[1,2,3].map(i => (
+              <div key={i} className="ft-pulse" style={{ height: 64, borderRadius: 16, background: t.panel2 }}/>
+            ))}
+          </Stack>
         ) : walletTx.length === 0 ? (
           <Card pad={24} radius={20} style={{ textAlign: 'center' }}>
             <div style={{ fontSize: 32, marginBottom: 8 }}>💳</div>
-            <div style={{ color: t.text2, fontSize: 14, fontWeight: 500 }}>No payments yet</div>
-            <div style={{ color: t.text3, fontSize: 12, marginTop: 4 }}>Add money to get started</div>
+            <div style={{ color: t.text2, fontSize: 14, fontWeight: 500 }}>No transactions yet</div>
+            <div style={{ color: t.text3, fontSize: 12, marginTop: 4 }}>Add money or make a payment to get started</div>
           </Card>
         ) : (
           <Card pad={4} radius={20}>
-            {walletTx.map((wtx, i) => (
-              <div key={wtx.id} style={{
-                display: 'flex', alignItems: 'center', gap: 12,
-                padding: '12px 12px',
-                borderBottom: i < walletTx.length - 1 ? `1px solid ${t.hairline}` : 'none',
-              }}>
-                <div style={{
-                  width: 40, height: 40, borderRadius: 12,
-                  background: wtx.type === 'credit' ? `${t.accent}22` : `${t.rose}22`,
-                  border: `1px solid ${wtx.type === 'credit' ? t.accent : t.rose}44`,
-                  display: 'flex', alignItems: 'center', justifyContent: 'center',
+            {walletTx.map((wtx, i) => {
+              const isCredit = wtx.type === 'credit';
+              const sc = statusColor(wtx.status);
+              const sl = statusLabel(wtx.status);
+              return (
+                <div key={wtx.id} onClick={() => setSelectedTx(wtx)} className="ft-tap" style={{
+                  display: 'flex', alignItems: 'center', gap: 12, padding: '12px 12px', cursor: 'pointer',
+                  borderBottom: i < walletTx.length - 1 ? `1px solid ${t.hairline}` : 'none',
                 }}>
-                  <Icon name={wtx.type === 'credit' ? 'arrow-dn' : 'arrow-up'} size={18}
-                    color={wtx.type === 'credit' ? t.accent : t.rose}/>
-                </div>
-                <div style={{ flex: 1 }}>
-                  <div style={{ color: t.text, fontSize: 14, fontWeight: 600 }}>
-                    {wtx.type === 'credit' ? 'Money added' : 'Payment'}
-                  </div>
-                  <div style={{ color: t.text3, fontSize: 11, marginTop: 1 }}>
-                    {wtx.razorpay_payment_id ? `ID: ${wtx.razorpay_payment_id.slice(0, 14)}...` : fmtWalletDate(wtx.created_at)}
-                  </div>
-                </div>
-                <div style={{ textAlign: 'right' }}>
-                  <div className="ft-num" style={{
-                    color: wtx.type === 'credit' ? t.accent : t.text,
-                    fontSize: 15, fontWeight: 600,
+                  <div style={{
+                    width: 42, height: 42, borderRadius: 13, flexShrink: 0,
+                    background: isCredit ? `${t.accent}22` : `${t.rose}22`,
+                    border: `1px solid ${isCredit ? t.accent : t.rose}44`,
+                    display: 'flex', alignItems: 'center', justifyContent: 'center',
                   }}>
-                    {wtx.type === 'credit' ? '+' : '-'}{fmtMoney(wtx.amount)}
+                    <Icon name={isCredit ? 'arrow-dn' : 'send'} size={18} color={isCredit ? t.accent : t.rose}/>
                   </div>
-                  <div style={{ color: t.text3, fontSize: 10, marginTop: 1 }}>
-                    {fmtWalletDate(wtx.created_at)}
+                  <div style={{ flex: 1, minWidth: 0 }}>
+                    <div style={{ color: t.text, fontSize: 14, fontWeight: 600, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                      {isCredit ? 'Money added' : (wtx.description ? wtx.description.split(' · ')[0] : 'Payment sent')}
+                    </div>
+                    <div style={{ color: t.text3, fontSize: 11, marginTop: 1 }}>{fmtWalletDate(wtx.created_at)}</div>
+                  </div>
+                  <div style={{ textAlign: 'right', flexShrink: 0 }}>
+                    <div className="ft-num" style={{ color: isCredit ? t.accent : t.text, fontSize: 15, fontWeight: 600 }}>
+                      {isCredit ? '+' : '−'}₹{wtx.amount.toLocaleString('en-IN')}
+                    </div>
+                    {sl && (
+                      <div style={{ color: sc, fontSize: 10, fontWeight: 600, marginTop: 2 }}>{sl}</div>
+                    )}
                   </div>
                 </div>
-              </div>
-            ))}
+              );
+            })}
           </Card>
         )}
       </div>
+
+      {/* Transaction detail sheet — item 17 */}
+      {selectedTx && <WalletTxDetailSheet wtx={selectedTx} onClose={() => setSelectedTx(null)}/>}
     </div>
   );
 }
+
+// Shared numpad amount formatter — item 21
+const fmtNumpadDisplay = (rawDigits) => {
+  if (!rawDigits) return '0';
+  const [int, dec] = rawDigits.split('.');
+  const formatted = parseInt(int || '0', 10).toLocaleString('en-IN');
+  return dec !== undefined ? `${formatted}.${dec}` : formatted;
+};
 
 function AddMoneySheet({ user, onClose, onSuccess }) {
   const t = useTheme();
@@ -5653,13 +5741,15 @@ function AddMoneySheet({ user, onClose, onSuccess }) {
   const [error, setError] = React.useState('');
 
   const num = parseFloat(amount || '0') || 0;
-
-  // Razorpay processes in INR regardless of app currency setting
   const INR = '₹';
   const MAX_AMOUNT = 99999;
 
   const tap = (k) => {
-    if (k === 'del') { setAmount(a => a.slice(0, -1)); return; }
+    if (k === 'del') {
+      setAmount(a => a.slice(0, -1));
+      return;
+    }
+    // item 22: long-clear handled by holding del — single tap is normal del
     if (k === '.') { if (amount.includes('.')) return; setAmount(a => (a || '0') + '.'); return; }
     setAmount(a => {
       if (a.includes('.') && a.split('.')[1]?.length >= 2) return a;
@@ -5670,8 +5760,26 @@ function AddMoneySheet({ user, onClose, onSuccess }) {
   };
   const quickAmounts = [100, 500, 1000, 2000];
 
+  const CONFIRM_THRESHOLD = 5000; // item 24: ask for confirmation above ₹5,000
+
+  const handleAddClick = () => {
+    if (num < 1) return;
+    if (num >= CONFIRM_THRESHOLD && step !== 'confirming') { setStep('confirming'); return; }
+    initiatePayment();
+  };
+
   const initiatePayment = async () => {
     if (num < 1) return;
+    // item 27: check Razorpay key is configured
+    if (!RAZORPAY_KEY_ID) {
+      setError('Payment gateway not configured. Please contact support.');
+      return;
+    }
+    // item 20: offline check
+    if (!navigator.onLine) {
+      setError('No internet connection. Please check your network and try again.');
+      return;
+    }
     setLoading(true);
     setError('');
 
@@ -5733,7 +5841,7 @@ function AddMoneySheet({ user, onClose, onSuccess }) {
             setTimeout(() => {
               onSuccess(num);
               onClose();
-            }, 1500);
+            }, 2200);
           } catch (e) {
             setError('Payment received but verification failed. Contact support.');
             setStep('amount');
@@ -5763,6 +5871,38 @@ function AddMoneySheet({ user, onClose, onSuccess }) {
     }
   };
 
+  // item 24: large-amount confirmation screen
+  if (step === 'confirming') {
+    return (
+      <div className="ft-fade-in" style={{
+        position: 'absolute', inset: 0, background: t.bg, zIndex: 100,
+        display: 'flex', alignItems: 'center', justifyContent: 'center', flexDirection: 'column', gap: 16, padding: '0 28px',
+      }}>
+        <div style={{
+          width: 80, height: 80, borderRadius: 24, background: `${t.amber}22`,
+          border: `1px solid ${t.amber}44`,
+          display: 'flex', alignItems: 'center', justifyContent: 'center',
+        }}>
+          <span style={{ fontSize: 40 }}>⚠️</span>
+        </div>
+        <div style={{ color: t.text, fontSize: 22, fontWeight: 700, letterSpacing: -0.5, textAlign: 'center' }}>
+          Confirm payment
+        </div>
+        <div style={{ color: t.text2, fontSize: 15, textAlign: 'center', lineHeight: 1.5 }}>
+          You're about to add{' '}
+          <span className="ft-num" style={{ color: t.accent, fontWeight: 700 }}>₹{num.toLocaleString('en-IN')}</span>
+          {' '}to your FinTrack wallet via Razorpay.
+        </div>
+        <Stack gap={10} style={{ width: '100%', marginTop: 8 }}>
+          <Btn full size="lg" onClick={() => { setStep('amount'); initiatePayment(); }}>
+            Yes, add ₹{num.toLocaleString('en-IN')}
+          </Btn>
+          <Btn full size="lg" variant="ghost" onClick={() => setStep('amount')}>Go back</Btn>
+        </Stack>
+      </div>
+    );
+  }
+
   if (step === 'verifying') {
     return (
       <div className="ft-fade-in" style={{
@@ -5781,11 +5921,13 @@ function AddMoneySheet({ user, onClose, onSuccess }) {
     );
   }
 
+  // item 19: success screen with Done button
   if (step === 'success') {
     return (
       <div className="ft-fade-in" style={{
         position: 'absolute', inset: 0, background: t.bg, zIndex: 100,
         display: 'flex', alignItems: 'center', justifyContent: 'center', flexDirection: 'column', gap: 16,
+        padding: '0 24px',
       }}>
         <div className="ft-pop" style={{
           width: 96, height: 96, borderRadius: 99, background: t.accent,
@@ -5794,10 +5936,13 @@ function AddMoneySheet({ user, onClose, onSuccess }) {
         }}>
           <Icon name="check" size={48} color={t.accentInk} strokeWidth={2.5}/>
         </div>
-        <div style={{ color: t.text, fontSize: 22, fontWeight: 600, letterSpacing: -0.5 }}>Money added!</div>
-        <div className="ft-num" style={{ color: t.text2, fontSize: 15 }}>
-          +{fmtMoney(num)} to your wallet
+        <div style={{ color: t.text, fontSize: 24, fontWeight: 700, letterSpacing: -0.5 }}>Money added!</div>
+        <div className="ft-num" style={{ color: t.text2, fontSize: 16 }}>
+          +{INR}{num.toLocaleString('en-IN')} added to your wallet
         </div>
+        <Btn full size="lg" onClick={() => { onSuccess(num); onClose(); }} style={{ marginTop: 8 }}>
+          Done
+        </Btn>
       </div>
     );
   }
@@ -5819,16 +5964,24 @@ function AddMoneySheet({ user, onClose, onSuccess }) {
           <Icon name="close" size={18} color={t.text}/>
         </button>
         <div style={{ color: t.text, fontSize: 15, fontWeight: 600 }}>Add Money</div>
-        <div style={{ width: 36 }}/>
+        {/* item 22: clear button when amount exists */}
+        {amount ? (
+          <button onClick={() => setAmount('')} className="ft-tap" style={{
+            width: 36, height: 36, borderRadius: 99, background: `${t.rose}22`,
+            border: `1px solid ${t.rose}44`, display: 'flex', alignItems: 'center', justifyContent: 'center', cursor: 'pointer',
+          }}>
+            <span style={{ color: t.rose, fontSize: 11, fontWeight: 700 }}>CLR</span>
+          </button>
+        ) : <div style={{ width: 36 }}/>}
       </Row>
 
-      {/* Amount display */}
+      {/* Amount display — item 21: formatted with commas */}
       <div style={{ padding: '20px 20px 0', textAlign: 'center' }}>
         <div className="ft-num" style={{
-          color: num > 0 ? t.text : t.text4, fontSize: 56, fontWeight: 600, letterSpacing: -3, lineHeight: 1,
+          color: num > 0 ? t.text : t.text4, fontSize: 52, fontWeight: 600, letterSpacing: -2, lineHeight: 1,
         }}>
-          <span style={{ fontSize: 32, opacity: 0.6, verticalAlign: 'top', marginRight: 2 }}>{INR}</span>
-          {amount || '0'}
+          <span style={{ fontSize: 30, opacity: 0.6, verticalAlign: 'top', marginRight: 2 }}>{INR}</span>
+          {fmtNumpadDisplay(amount)}
         </div>
         <div style={{ color: t.text3, fontSize: 11, marginTop: 6, fontWeight: 500 }}>
           Payments processed in INR via Razorpay
@@ -5844,7 +5997,7 @@ function AddMoneySheet({ user, onClose, onSuccess }) {
         ))}
       </div>
 
-      {/* Error */}
+      {/* Error — item 20: offline + other errors */}
       {error && (
         <div style={{
           margin: '8px 20px 0', padding: '10px 14px', borderRadius: 12,
@@ -5856,7 +6009,7 @@ function AddMoneySheet({ user, onClose, onSuccess }) {
       )}
 
       {/* Security badge */}
-      <div style={{ padding: '10px 20px 0', display: 'flex', justifyContent: 'center' }}>
+      <div style={{ padding: '8px 20px 0', display: 'flex', justifyContent: 'center' }}>
         <Row gap={6} align="center">
           <Icon name="lock" size={12} color={t.text3}/>
           <span style={{ color: t.text3, fontSize: 11, fontWeight: 500 }}>
@@ -5878,9 +6031,227 @@ function AddMoneySheet({ user, onClose, onSuccess }) {
             </button>
           ))}
         </div>
-        <Btn full size="lg" onClick={initiatePayment} disabled={num < 1 || num > MAX_AMOUNT || loading}
+        <Btn full size="lg" onClick={handleAddClick} disabled={num < 1 || num > MAX_AMOUNT || loading}
           style={{ marginTop: 12, height: 56, fontSize: 17 }}>
-          {loading ? 'Processing...' : <>Pay {num > 0 && <span className="ft-num" style={{ marginLeft: 4 }}>{INR}{num.toLocaleString('en-IN')}</span>}</>}
+          {loading ? 'Processing...' : <>Add {num > 0 && <span className="ft-num" style={{ marginLeft: 4 }}>{INR}{num.toLocaleString('en-IN')}</span>}</>}
+        </Btn>
+      </div>
+    </div>
+  );
+}
+
+// ════════════════════════════════════════════════════════════
+// PAY FROM WALLET — item 15
+// ════════════════════════════════════════════════════════════
+function PayFromWalletSheet({ user, walletBalance, onClose, onSuccess }) {
+  const t = useTheme();
+  const INR = '₹';
+  const MAX_AMOUNT = 99999;
+  const [amount, setAmount] = React.useState('');
+  const [upiId, setUpiId] = React.useState('');
+  const [description, setDescription] = React.useState('');
+  const [step, setStep] = React.useState('input'); // input | confirming | paying | success | error
+  const [loading, setLoading] = React.useState(false);
+  const [error, setError] = React.useState('');
+  const [txRef, setTxRef] = React.useState('');
+  const PAY_CONFIRM_THRESHOLD = 2000; // item 24: confirm above ₹2,000
+
+  const num = parseFloat(amount || '0') || 0;
+  const upiValid = /^[\w.\-]+@[\w.\-]+$/.test(upiId.trim());
+  const canPay = num >= 1 && num <= Math.min(MAX_AMOUNT, walletBalance) && upiValid;
+
+  const tap = (k) => {
+    if (k === 'del') { setAmount(a => a.slice(0, -1)); return; }
+    setAmount(a => {
+      if (k === '.') { if (a.includes('.')) return a; return (a || '0') + '.'; }
+      if (a.includes('.') && a.split('.')[1]?.length >= 2) return a;
+      const next = a === '0' ? k : a + k;
+      if (parseFloat(next) > Math.min(MAX_AMOUNT, walletBalance)) return a;
+      return next;
+    });
+  };
+
+  const handlePayClick = () => {
+    if (!canPay) return;
+    if (num >= PAY_CONFIRM_THRESHOLD && step !== 'confirming') { setStep('confirming'); return; }
+    initiatePayment();
+  };
+
+  const initiatePayment = async () => {
+    if (!canPay) return;
+    if (!navigator.onLine) { setError('No internet connection. Please try again.'); return; }
+    setLoading(true); setError('');
+    try {
+      const session = await db.auth.getSession();
+      const token = session?.data?.session?.access_token;
+      if (!token) throw new Error('Please log in again');
+      const res = await fetch('/.netlify/functions/pay-from-wallet', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+        body: JSON.stringify({ amount: num, upi_id: upiId.trim(), description: description.trim() }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || 'Payment failed');
+      setTxRef(data.tx_ref);
+      setStep('success');
+      setTimeout(() => { onSuccess(num); onClose(); }, 2500);
+    } catch (e) {
+      setError(e.message || 'Payment failed. Please try again.');
+      setStep('input');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  // item 24: confirmation screen for large pay amounts
+  if (step === 'confirming') {
+    return (
+      <div className="ft-fade-in" style={{
+        position: 'absolute', inset: 0, background: t.bg, zIndex: 100,
+        display: 'flex', alignItems: 'center', justifyContent: 'center', flexDirection: 'column', gap: 16, padding: '0 28px',
+      }}>
+        <div style={{ width: 80, height: 80, borderRadius: 24, background: `${t.amber}22`, border: `1px solid ${t.amber}44`, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+          <span style={{ fontSize: 40 }}>⚠️</span>
+        </div>
+        <div style={{ color: t.text, fontSize: 22, fontWeight: 700, letterSpacing: -0.5, textAlign: 'center' }}>Confirm payment</div>
+        <Stack gap={6} style={{ alignItems: 'center', textAlign: 'center' }}>
+          <div style={{ color: t.text2, fontSize: 15, lineHeight: 1.5 }}>
+            Send <span className="ft-num" style={{ color: t.rose, fontWeight: 700 }}>₹{num.toLocaleString('en-IN')}</span> to
+          </div>
+          <div style={{ color: t.text, fontSize: 14, fontWeight: 600, background: t.panel2, padding: '6px 16px', borderRadius: 99 }}>{upiId}</div>
+          {description && <div style={{ color: t.text3, fontSize: 13 }}>"{description}"</div>}
+        </Stack>
+        <Stack gap={10} style={{ width: '100%', marginTop: 8 }}>
+          <Btn full size="lg" style={{ background: t.rose, color: '#fff' }} onClick={() => { setStep('input'); initiatePayment(); }}>
+            Yes, send ₹{num.toLocaleString('en-IN')}
+          </Btn>
+          <Btn full size="lg" variant="ghost" onClick={() => setStep('input')}>Go back</Btn>
+        </Stack>
+      </div>
+    );
+  }
+
+  if (step === 'success') {
+    return (
+      <div className="ft-fade-in" style={{
+        position: 'absolute', inset: 0, background: t.bg, zIndex: 100,
+        display: 'flex', alignItems: 'center', justifyContent: 'center', flexDirection: 'column', gap: 16, padding: '0 24px',
+      }}>
+        <div className="ft-pop" style={{
+          width: 96, height: 96, borderRadius: 99, background: t.accent,
+          display: 'flex', alignItems: 'center', justifyContent: 'center', boxShadow: `0 0 60px ${t.accent}44`,
+        }}>
+          <Icon name="check" size={48} color={t.accentInk} strokeWidth={2.5}/>
+        </div>
+        <div style={{ color: t.text, fontSize: 24, fontWeight: 700, letterSpacing: -0.5 }}>Payment sent!</div>
+        <Stack gap={4} style={{ alignItems: 'center' }}>
+          <div className="ft-num" style={{ color: t.text2, fontSize: 16 }}>
+            {INR}{num.toLocaleString('en-IN')} → {upiId}
+          </div>
+          {txRef && <div style={{ color: t.text3, fontSize: 11 }}>Ref: {txRef}</div>}
+        </Stack>
+        <Btn full size="lg" onClick={() => { onSuccess(num); onClose(); }} style={{ marginTop: 8 }}>Done</Btn>
+      </div>
+    );
+  }
+
+  return (
+    <div className="ft-sheet" style={{ position: 'absolute', inset: 0, background: t.bg, zIndex: 100, display: 'flex', flexDirection: 'column' }}>
+      {/* Header */}
+      <Row justify="space-between" style={{ padding: '16px 20px 4px', paddingTop: 'max(16px, calc(env(safe-area-inset-top) + 8px))' }}>
+        <button onClick={onClose} className="ft-tap" style={{
+          width: 36, height: 36, borderRadius: 99, background: t.panel2,
+          border: `1px solid ${t.hairline}`, display: 'flex', alignItems: 'center', justifyContent: 'center', cursor: 'pointer',
+        }}>
+          <Icon name="close" size={18} color={t.text}/>
+        </button>
+        <div style={{ color: t.text, fontSize: 15, fontWeight: 600 }}>Pay / Send Money</div>
+        {amount ? (
+          <button onClick={() => setAmount('')} className="ft-tap" style={{
+            width: 36, height: 36, borderRadius: 99, background: `${t.rose}22`,
+            border: `1px solid ${t.rose}44`, display: 'flex', alignItems: 'center', justifyContent: 'center', cursor: 'pointer',
+          }}>
+            <span style={{ color: t.rose, fontSize: 11, fontWeight: 700 }}>CLR</span>
+          </button>
+        ) : <div style={{ width: 36 }}/>}
+      </Row>
+
+      {/* Balance indicator */}
+      <div style={{ textAlign: 'center', paddingTop: 8 }}>
+        <div style={{ color: t.text3, fontSize: 11, fontWeight: 500 }}>
+          Available: <span className="ft-num" style={{ color: t.accent }}>{INR}{walletBalance.toLocaleString('en-IN')}</span>
+        </div>
+      </div>
+
+      {/* Amount display */}
+      <div style={{ padding: '12px 20px 0', textAlign: 'center' }}>
+        <div className="ft-num" style={{ color: num > 0 ? t.text : t.text4, fontSize: 52, fontWeight: 600, letterSpacing: -2, lineHeight: 1 }}>
+          <span style={{ fontSize: 30, opacity: 0.6, verticalAlign: 'top', marginRight: 2 }}>{INR}</span>
+          {fmtNumpadDisplay(amount)}
+        </div>
+        {num > walletBalance && <div style={{ color: t.rose, fontSize: 11, marginTop: 4, fontWeight: 600 }}>Exceeds available balance</div>}
+      </div>
+
+      {/* UPI ID input */}
+      <div style={{ padding: '12px 20px 4px' }}>
+        <div style={{ position: 'relative' }}>
+          <input
+            value={upiId}
+            onChange={e => setUpiId(e.target.value)}
+            placeholder="Enter UPI ID (e.g. name@upi)"
+            style={{
+              width: '100%', height: 52, borderRadius: 16, padding: '0 16px',
+              background: t.panel2, color: t.text, fontSize: 14, fontFamily: 'Geist',
+              border: `1px solid ${upiId && !upiValid ? t.rose : t.hairline}`, outline: 'none',
+            }}
+          />
+          {upiId && upiValid && (
+            <div style={{ position: 'absolute', right: 14, top: '50%', transform: 'translateY(-50%)' }}>
+              <Icon name="check" size={18} color={t.accent} strokeWidth={2.5}/>
+            </div>
+          )}
+        </div>
+      </div>
+
+      {/* Optional note */}
+      <div style={{ padding: '0 20px 4px' }}>
+        <input
+          value={description}
+          onChange={e => setDescription(e.target.value)}
+          placeholder="Add a note (optional)"
+          style={{
+            width: '100%', height: 44, borderRadius: 14, padding: '0 16px',
+            background: t.panel2, color: t.text, fontSize: 13, fontFamily: 'Geist',
+            border: `1px solid ${t.hairline}`, outline: 'none',
+          }}
+        />
+      </div>
+
+      {/* Error */}
+      {error && (
+        <div style={{ margin: '4px 20px 0', padding: '10px 14px', borderRadius: 12, background: `${t.rose}22`, border: `1px solid ${t.rose}44`, color: t.rose, fontSize: 12, fontWeight: 500 }}>
+          {error}
+        </div>
+      )}
+
+      {/* Numpad */}
+      <div style={{ marginTop: 'auto', padding: '8px 16px', paddingBottom: 'max(14px, calc(env(safe-area-inset-bottom) + 8px))' }}>
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 8 }}>
+          {['1','2','3','4','5','6','7','8','9','.','0','del'].map(k => (
+            <button key={k} onClick={() => { navigator.vibrate?.([4]); tap(k); }} className="ft-tap" style={{
+              height: 48, borderRadius: 14, background: t.panel2, border: `1px solid ${t.hairline}`,
+              color: t.text, fontSize: 20, fontWeight: 500, fontFamily: 'Geist Mono',
+              display: 'flex', alignItems: 'center', justifyContent: 'center', cursor: 'pointer',
+            }}>
+              {k === 'del' ? <Icon name="back" size={18} color={t.text}/> : k}
+            </button>
+          ))}
+        </div>
+        <Btn full size="lg" onClick={handlePayClick} disabled={!canPay || loading} style={{ marginTop: 10, height: 56, fontSize: 17 }}>
+          {loading ? 'Sending...' : <>
+            <Icon name="send" size={18} color={canPay ? t.accentInk : t.text3}/>
+            {num > 0 ? `Send ${INR}${num.toLocaleString('en-IN')}` : 'Send'}
+          </>}
         </Btn>
       </div>
     </div>
@@ -5904,6 +6275,7 @@ function AppShell({ store, theme, setTheme, tweaks, setTweak, platform, sharedNa
   const [onboardOpen, setOnboardOpen] = sharedNav.onboard;
   const [toast, showToast] = useToast();
   const [addMoneyOpen, setAddMoneyOpen] = React.useState(false);
+  const [payOpen, setPayOpen] = React.useState(false);
 
   const nav = {
     push: (s) => setStack(prev => [...prev, s]),
@@ -5920,7 +6292,7 @@ function AppShell({ store, theme, setTheme, tweaks, setTweak, platform, sharedNa
     if (activeSub === 'settings') return <SettingsScreen store={store} nav={nav} theme={theme} setTheme={setTheme} tweaks={tweaks} setTweak={setTweak} user={user} onSignOut={onSignOut || (() => { nav.reset(); setOnboardOpen(true); })} authLogout={authLogout}/>;
     if (activeSub === 'all-tx') return <AllTxScreen store={store} nav={nav}/>;
     if (activeSub === 'streak') return <ProfileScreen store={store} nav={nav} theme={theme} setTheme={setTheme} user={user}/>;
-    if (activeSub === 'wallet') return <WalletScreen store={store} nav={nav} user={user} onAddMoney={() => setAddMoneyOpen(true)}/>;
+    if (activeSub === 'wallet') return <WalletScreen store={store} nav={nav} user={user} onAddMoney={() => setAddMoneyOpen(true)} onPay={() => setPayOpen(true)}/>;
 
     switch (tab) {
       case 'home': return <HomeScreen store={store} nav={nav} onAddTap={() => setAddOpen(true)} user={user}/>;
@@ -5967,7 +6339,13 @@ function AppShell({ store, theme, setTheme, tweaks, setTweak, platform, sharedNa
       {/* Add money to wallet */}
       {addMoneyOpen && <AddMoneySheet user={user} onClose={() => setAddMoneyOpen(false)} onSuccess={(amt) => {
         store.refreshWallet();
-        showToast(`Added ${fmtMoney(amt)} to wallet`, { emoji: '💰' });
+        showToast(`₹${amt.toLocaleString('en-IN')} added to wallet`, { emoji: '💰' });
+      }}/>}
+
+      {/* Pay from wallet */}
+      {payOpen && <PayFromWalletSheet user={user} walletBalance={store.walletBalance} onClose={() => setPayOpen(false)} onSuccess={(amt) => {
+        store.refreshWallet();
+        showToast(`₹${amt.toLocaleString('en-IN')} sent`, { emoji: '✅' });
       }}/>}
 
       {/* Onboarding */}
